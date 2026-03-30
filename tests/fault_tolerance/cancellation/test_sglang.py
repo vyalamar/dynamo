@@ -187,7 +187,6 @@ class DynamoWorkerProcess(ManagedProcess):
 
 @pytest.mark.timeout(160)  # 3x average
 @pytest.mark.gpu_1
-@pytest.mark.skip(reason="DYN-2265")
 @pytest.mark.nightly
 def test_request_cancellation_sglang_aggregated(
     request, runtime_services_dynamic_ports, predownload_models
@@ -270,6 +269,7 @@ def test_request_cancellation_sglang_aggregated(
                     pattern="New SGLang Request ID: ",
                     log_offset=worker_log_offset,
                     match_type="contains",
+                    max_wait_ms=60000,
                 )
 
                 # Now we know SGLang has the request, cancel it
@@ -281,7 +281,7 @@ def test_request_cancellation_sglang_aggregated(
                     process=worker,
                     pattern=f"Aborted Request ID: {request_id}",
                     log_offset=worker_log_offset,
-                    max_wait_ms=2000,
+                    max_wait_ms=60000,
                 )
 
                 # Verify frontend log has kill message

@@ -583,22 +583,9 @@ class BaseWorkerHandler(BaseGenerativeHandler[RequestT, ResponseT]):
                 f"Cancellation or shutdown signal received for SGLang Request ID {sglang_request_id}, Context: {context.id()}"
             )
 
-            # Call abort_request on the tokenizer_manager through the engine
-            if (
-                hasattr(self.engine, "tokenizer_manager")
-                and self.engine.tokenizer_manager
-            ):
-                logging.info(
-                    f"Calling SGLang abort_request for Request ID {sglang_request_id}"
-                )
-                self.engine.tokenizer_manager.abort_request(
-                    rid=sglang_request_id, abort_all=False
-                )
-                logging.info(f"Aborted Request ID: {context.id()}")
-            else:
-                logging.error(
-                    f"SGLang tokenizer_manager not found for abort request: {context.id()}"
-                )
+            self._abort_sglang_request(
+                request_id_future, context, source="_handle_cancellation"
+            )
 
             # Check which event triggered and raise GeneratorExit if shutdown
             if shutdown_task and shutdown_task in done:
@@ -616,6 +603,59 @@ class BaseWorkerHandler(BaseGenerativeHandler[RequestT, ResponseT]):
                 f"Cancellation monitor task cancelled for SGLang Request ID {request_id}, Context: {context.id()}"
             )
             raise
+
+    def _abort_sglang_request(
+        self, request_id_future: asyncio.Future, context: Context, *, source: str
+    ) -> bool:
+        """Abort an in-flight SGLang request when its request ID is available."""
+        if not request_id_future.done() or request_id_future.cancelled():
+            return False
+
+        try:
+            sglang_request_id = request_id_future.result()
+        except Exception:
+            logging.debug(
+                "Unable to resolve SGLang request ID during %s for Context: %s",
+                source,
+                context.id(),
+                exc_info=True,
+            )
+            return False
+
+        if not (
+            hasattr(self.engine, "tokenizer_manager") and self.engine.tokenizer_manager
+        ):
+            logging.error(
+                "SGLang tokenizer_manager not found for abort request: %s",
+                context.id(),
+            )
+            return False
+
+        try:
+            logging.info(
+                "Calling SGLang abort_request for Request ID %s",
+                sglang_request_id,
+            )
+            self.engine.tokenizer_manager.abort_request(
+                rid=sglang_request_id, abort_all=False
+            )
+            logging.info("Aborted Request ID: %s", context.id())
+            logging.debug(
+                "Abort fired during %s for SGLang Request ID %s, Context: %s",
+                source,
+                sglang_request_id,
+                context.id(),
+            )
+            return True
+        except Exception:
+            logging.warning(
+                "abort_request failed during %s for SGLang Request ID %s, Context: %s",
+                source,
+                sglang_request_id,
+                context.id(),
+                exc_info=True,
+            )
+            return False
 
     @asynccontextmanager
     async def _cancellation_monitor(
@@ -648,6 +688,9 @@ class BaseWorkerHandler(BaseGenerativeHandler[RequestT, ResponseT]):
         finally:
             # Clean up the background cancellation task
             request_id = "unknown"
+            self._abort_sglang_request(
+                request_id_future, context, source="_cancellation_monitor cleanup"
+            )
             if request_id_future.done() and not request_id_future.cancelled():
                 try:
                     request_id = request_id_future.result()
